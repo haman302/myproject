@@ -1,0 +1,54 @@
+﻿name: deploy-to-kind
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-kind
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versions
+        shell: pwsh
+        run: |
+          docker version
+          kind get clusters
+          kubectl version --client
+          kubectl config current-context
+
+      - name: Ensure kind cluster
+        shell: pwsh
+        run: |
+          if (-not (kind get clusters | Select-String -SimpleMatch "isp-dev")) {
+            kind create cluster --name isp-dev
+          }
+          kubectl config use-context kind-isp-dev
+
+      - name: Build image
+        shell: pwsh
+        run: |
+          docker build -t myproject/hello-flask:${{ github.sha }} app/hello-flask
+
+      - name: Load image to kind
+        shell: pwsh
+        run: |
+          kind load docker-image myproject/hello-flask:${{ github.sha }} --name isp-dev
+
+      - name: Apply base manifests
+        shell: pwsh
+        run: |
+          kubectl apply -f cluster/hello-all.yaml
+
+      - name: Set image and rollout
+        shell: pwsh
+        run: |
+          kubectl -n hello set image deploy/hello web=myproject/hello-flask:${{ github.sha }}
+          kubectl -n hello rollout status deploy/hello --timeout=180s
